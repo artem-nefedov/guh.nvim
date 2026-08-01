@@ -105,6 +105,7 @@ dd      View PR diff + comments. |guh-diff|
         <Plug>(guh-diff)
 
 dl      View the most-recent CI logs for all job-names in the CI matrix.
+        Also shows statuses for non-workflow checks.
         <Plug>(guh-logs)
 
 ]f      View the next/newer "thing".

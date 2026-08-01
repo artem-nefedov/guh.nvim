@@ -87,14 +87,14 @@
 --- @field messageBody string
 --- @field authors table[]
 
---- @class CIJob GitHub Actions check-run summary (one matrix-expanded job at PR head-commit).
+--- @class CIJob A check at the PR head-commit: a github-actions job, third-party CheckRun, or legacy commit status.
 --- @field conclusion? string lowercase: "success", "failure", "cancelled", … (nil if in-progress).
---- @field databaseId integer Workflow job id (parsed from `detailsUrl`), feeds `gh.get_pr_ci_logs`.
---- @field name string "workflow: job-name" (e.g. "CI: build (ubuntu)"), or just the job-name if no workflow.
---- @field runId integer Workflow run id (parsed from `detailsUrl`), feeds `gh run rerun`.
+--- @field databaseId? integer Workflow job id (parsed from `detailsUrl`), feeds `gh.get_pr_ci_logs`. Only github-actions jobs have a fetchable log; nil otherwise.
+--- @field name string "workflow: job-name" (e.g. "CI: build (ubuntu)"), or just the check/context name.
+--- @field runId? integer Workflow run id (parsed from `detailsUrl`), feeds `gh run rerun`. Only github-actions jobs.
 --- @field startedAt? string
 --- @field status? string lowercase: "completed", "in_progress", "queued", …
---- @field url? string Web URL of the job (`detailsUrl`).
+--- @field url? string Web URL of the job/check (`detailsUrl` / status `targetUrl`).
 
 --- @class PullRequest PR data selected from GraphQL by `gh.get_pr_data`.
 --- @field additions number Lines added across the diff.

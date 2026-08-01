@@ -58,7 +58,7 @@ When viewing a PR,
 - Diff comments are presented (1) in a 'scrollbind' split, (2) as "diagnostics" (`vim.diagnostic`),
   (3) loaded in quickfix.
 - Files marked as "Viewed" are collapsed to a `(viewed) <path>` line.
-- You can view the most-recent CI logs for all "jobs" in the CI matrix.
+- You can view the most-recent CI logs for all "jobs" in the CI matrix and statuses for other checks.
 
 Editable buffers (comments, merge message) confirm the action on write-and-close (`ZZ` submits, `ZQ`
 discards).

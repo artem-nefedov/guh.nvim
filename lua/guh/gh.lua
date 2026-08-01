@@ -188,8 +188,22 @@ local function flatten_threads_to_comments(threads)
   return out, #(threads or {}), n_resolved
 end
 
---- Extracts CI jobs (github-actions check-runs) from the HEAD commit `statusCheckRollup`.
---- Dedupes by name ("workflow: job-name", latest `startedAt`), drops `skipped`, sorts by (status, name).
+--- Maps a `StatusContext.state` (Status API) onto a CheckRun-style lowercase `conclusion`,
+--- so `ci_icon`/sorting treat both alike. PENDING/EXPECTED -> nil ("in-progress").
+local function status_state_conclusion(check_state)
+  if check_state == 'SUCCESS' then
+    return 'success'
+  elseif check_state == 'FAILURE' or check_state == 'ERROR' then
+    return 'failure'
+  end
+  return nil -- PENDING / EXPECTED / unknown.
+end
+
+--- Extracts all checks from the HEAD commit `statusCheckRollup`: GitHub Actions jobs,
+--- third-party `CheckRun`s, and legacy commit statuses (`StatusContext`, e.g. webhook-posted).
+--- Dedupes by name (latest timestamp), drops `skipped`, sorts by (status, name).
+--- Only github-actions jobs get a `databaseId`/`runId` (fetchable log); the rest carry only a
+--- `url` (opened in the browser instead of showing a log).
 ---
 --- @return CIJob[]
 local function to_ci_jobs(node)
@@ -197,29 +211,37 @@ local function to_ci_jobs(node)
   local contexts = vim.tbl_get(rollup_commits[1] or {}, 'commit', 'statusCheckRollup', 'contexts', 'nodes') or {}
   local by_name = {}
   for _, cr in ipairs(contexts) do
-    -- Only `CheckRun` from the `github-actions` app has a fetchable workflow log.
-    local is_actions = cr.__typename == 'CheckRun' and vim.tbl_get(cr, 'checkSuite', 'app', 'slug') == 'github-actions'
-    -- detailsUrl: https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}
-    local url = (is_actions and cr.detailsUrl) or ''
-    local run_id, job_id = url:match('/actions/runs/(%d+)/job/(%d+)')
-    run_id = tonumber(run_id)
-    job_id = tonumber(job_id)
-    if job_id and cr.conclusion ~= 'SKIPPED' then
+    local job ---@type CIJob?
+    if cr.__typename == 'CheckRun' and cr.conclusion ~= 'SKIPPED' then
+      -- Only `CheckRun` from the `github-actions` app has a fetchable workflow log.
+      local is_actions = vim.tbl_get(cr, 'checkSuite', 'app', 'slug') == 'github-actions'
+      -- detailsUrl: https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}
+      local run_id, job_id = (is_actions and cr.detailsUrl or ''):match('/actions/runs/(%d+)/job/(%d+)')
       local workflow = vim.tbl_get(cr, 'checkSuite', 'workflowRun', 'workflow', 'name')
-      -- Name = "<workflow>: <job>". Affects dedupe + sorting.
-      local name = workflow and ('%s: %s'):format(workflow, cr.name) or cr.name
-      local existing = by_name[name]
-      if not existing or (cr.startedAt or '') > (existing.startedAt or '') then
-        by_name[name] = {
-          databaseId = job_id,
-          runId = run_id,
-          name = name,
-          -- Mimic the REST API which returns lowercase ("success", "failure", …).
-          conclusion = cr.conclusion and cr.conclusion:lower() or nil,
-          status = cr.status and cr.status:lower() or nil,
-          startedAt = cr.startedAt,
-          url = cr.detailsUrl,
-        }
+      job = {
+        databaseId = tonumber(job_id), -- nil -> no fetchable log (non-actions or malformed URL).
+        runId = tonumber(run_id),
+        -- Name = "<workflow>: <job>" for actions. Affects dedupe + sorting.
+        name = workflow and ('%s: %s'):format(workflow, cr.name) or cr.name,
+        -- Mimic the REST API which returns lowercase ("success", "failure", …).
+        conclusion = cr.conclusion and cr.conclusion:lower() or nil,
+        status = cr.status and cr.status:lower() or nil,
+        startedAt = cr.startedAt,
+        url = cr.detailsUrl,
+      }
+    elseif cr.__typename == 'StatusContext' then
+      -- Legacy commit status (Status API, often webhook-posted): no fetchable log.
+      job = {
+        name = cr.context,
+        conclusion = status_state_conclusion(cr.state),
+        startedAt = cr.createdAt,
+        url = cr.targetUrl,
+      }
+    end
+    if job and job.name then
+      local existing = by_name[job.name]
+      if not existing or (job.startedAt or '') > (existing.startedAt or '') then
+        by_name[job.name] = job
       end
     end
   end
@@ -385,6 +407,10 @@ function M.get_pr_data(prnum, repo, opts, on_result)
                     ... on CheckRun{
                       databaseId name conclusion status startedAt detailsUrl
                       checkSuite{ app{ slug } workflowRun{ workflow{ name } } }
+                    }
+                    # Legacy commit statuses (Status API, e.g. webhook-posted): no fetchable log.
+                    ... on StatusContext{
+                      context state createdAt targetUrl
                     }
                   }
                 }

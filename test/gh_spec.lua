@@ -135,11 +135,27 @@ describe('guh.gh', function()
                       ctx('lint', 'SUCCESS', '2026-06-12T12:00:00Z', 105, { workflow = 'Lint' }),
                       -- Skipped: drop entirely.
                       ctx('skipped-job', 'SKIPPED', '2026-06-12T11:00:00Z', 102),
-                      -- Non-actions app: drop.
-                      ctx('codecov', 'SUCCESS', '2026-06-12T11:00:00Z', 103, { slug = 'codecov' }),
-                      -- Non-CheckRun typename: drop.
-                      ctx('status-context', 'SUCCESS', '2026-06-12T11:00:00Z', 104, { typename = 'StatusContext' }),
-                      -- Malformed detailsUrl (no /actions/runs/.../job/...): drop.
+                      -- Third-party CheckRun (non-actions app, no workflowRun): kept, but no
+                      -- databaseId (unfetchable log).
+                      {
+                        __typename = 'CheckRun',
+                        name = 'codecov',
+                        conclusion = 'SUCCESS',
+                        status = 'COMPLETED',
+                        startedAt = '2026-06-12T11:00:00Z',
+                        detailsUrl = 'https://codecov.io/gh/o/r/pull/1',
+                        checkSuite = { app = { slug = 'codecov' } },
+                      },
+                      -- Legacy commit status (Status API, e.g. webhook-posted): kept, opened via URL.
+                      {
+                        __typename = 'StatusContext',
+                        context = 'ci/webhook',
+                        state = 'FAILURE',
+                        createdAt = '2026-06-12T11:00:00Z',
+                        targetUrl = 'https://ci.example.com/build/42',
+                      },
+                      -- Actions CheckRun with a malformed detailsUrl (no /actions/runs/.../job/...):
+                      -- kept, but no databaseId (falls back to opening its URL).
                       {
                         __typename = 'CheckRun',
                         name = 'orphan',
@@ -164,8 +180,9 @@ describe('guh.gh', function()
 
       local jobs = to_ci_jobs(node)
 
-      -- 4 jobs survive: "CI: lint", "Lint: lint", "CI: build", "CI: test". (skipped/codecov/StatusContext/orphan dropped.)
-      assert(#jobs == 4, ('expected 4 jobs, got %d'):format(#jobs))
+      -- 7 checks survive: "CI: lint", "Lint: lint", "CI: build", "CI: test", "codecov",
+      -- "ci/webhook", "orphan". (Only the skipped job is dropped.)
+      assert(#jobs == 7, ('expected 7 jobs, got %d'):format(#jobs))
 
       local by_name = {}
       for _, j in ipairs(jobs) do
@@ -195,11 +212,34 @@ describe('guh.gh', function()
       assert(by_name['CI: test'].databaseId == 201)
       assert(by_name['CI: test'].runId == 777)
 
-      -- Sort: by (conclusion or status), then name. Key "in_progress" < "success", so "CI: build" first;
-      -- then the three "success" jobs alphabetic by name: "CI: lint", "CI: test", "Lint: lint".
-      assert(jobs[1].name == 'CI: build', ('jobs[1]=%s'):format(jobs[1].name))
-      assert(jobs[2].name == 'CI: lint', ('jobs[2]=%s'):format(jobs[2].name))
-      assert(jobs[3].name == 'CI: test', ('jobs[3]=%s'):format(jobs[3].name))
+      -- Third-party CheckRun (non-actions): kept, but no databaseId/runId (unfetchable), URL preserved.
+      assert(by_name['codecov'], 'codecov missing')
+      assert(by_name['codecov'].databaseId == nil, 'codecov should have nil databaseId')
+      assert(by_name['codecov'].runId == nil, 'codecov should have nil runId')
+      assert(by_name['codecov'].conclusion == 'success')
+      assert(by_name['codecov'].url == 'https://codecov.io/gh/o/r/pull/1')
+
+      -- Legacy commit status: state FAILURE → conclusion "failure", targetUrl → url, no databaseId.
+      assert(by_name['ci/webhook'], 'ci/webhook missing')
+      assert(by_name['ci/webhook'].databaseId == nil, 'ci/webhook should have nil databaseId')
+      assert(by_name['ci/webhook'].conclusion == 'failure', ('ci/webhook conclusion=%s'):format(by_name['ci/webhook'].conclusion))
+      assert(by_name['ci/webhook'].url == 'https://ci.example.com/build/42')
+
+      -- orphan: actions CheckRun with malformed URL → no databaseId, opened via its URL.
+      assert(by_name['orphan'], 'orphan missing')
+      assert(by_name['orphan'].databaseId == nil, 'orphan should have nil databaseId')
+      assert(by_name['orphan'].url == 'https://github.com/o/r/something-else')
+
+      -- Sort: by (conclusion or status), then name. "failure" < "in_progress" < "success":
+      -- "ci/webhook" (failure), "CI: build" (in_progress), then success jobs alphabetic:
+      -- "CI: lint", "CI: test", "Lint: lint", "codecov", "orphan".
+      assert(jobs[1].name == 'ci/webhook', ('jobs[1]=%s'):format(jobs[1].name))
+      assert(jobs[2].name == 'CI: build', ('jobs[2]=%s'):format(jobs[2].name))
+      assert(jobs[3].name == 'CI: lint', ('jobs[3]=%s'):format(jobs[3].name))
+      assert(jobs[4].name == 'CI: test', ('jobs[4]=%s'):format(jobs[4].name))
+      assert(jobs[5].name == 'Lint: lint', ('jobs[5]=%s'):format(jobs[5].name))
+      assert(jobs[6].name == 'codecov', ('jobs[6]=%s'):format(jobs[6].name))
+      assert(jobs[7].name == 'orphan', ('jobs[7]=%s'):format(jobs[7].name))
       assert(jobs[4].name == 'Lint: lint', ('jobs[4]=%s'):format(jobs[4].name))
     end)
   end)

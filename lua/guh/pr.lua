@@ -300,6 +300,14 @@ end
 --- @param pr_id integer
 --- @param repo string "owner/name"
 local function show_ci_log(job, pr_id, repo)
+  -- Non-actions checks (third-party CheckRun / legacy commit status) have no fetchable log:
+  -- open their web URL in the browser instead.
+  if not job.databaseId then
+    if job.url and job.url ~= '' then
+      return vim.ui.open(job.url)
+    end
+    return util.msg(('No log or URL for check "%s"'):format(job.name), vim.log.levels.WARN)
+  end
   -- Key the bufname by `job.databaseId` to disambiguate (multiple logs per PR).
   -- XXX: store pr-id in `b:guh.id` for refresh/actions.
   local buf = state.init_buf('prlogs', true, repo, job.databaseId, { id = pr_id })
@@ -323,10 +331,14 @@ local function preload_ci_logs(pr_id, repo, ci_jobs, limit)
   limit = math.min(limit or 5, #ci_jobs)
   local top = {}
   for i = 1, limit do
-    -- Touch the prlogs/ buf so its key exists in `state.bufs`.
-    state.init_buf('prlogs', nil, repo, ci_jobs[i].databaseId, { id = pr_id })
-    if ci_jobs[i].conclusion then
-      table.insert(top, ci_jobs[i])
+    local job = ci_jobs[i]
+    -- Only github-actions jobs (with a `databaseId`) have a fetchable log to preload.
+    if job.databaseId then
+      -- Touch the prlogs/ buf so its key exists in `state.bufs`.
+      state.init_buf('prlogs', nil, repo, job.databaseId, { id = pr_id })
+      if job.conclusion then
+        table.insert(top, job)
+      end
     end
   end
   --- @param job CIJob
