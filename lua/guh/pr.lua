@@ -557,8 +557,10 @@ function M.merge_pr()
       vim.schedule(function()
         local subject, body
         if method == 'merge' then
-          subject = ('Merge #%s %s'):format(id, pr.title)
-          body = pr.body or ''
+          -- Match GitHub's default merge-commit message.
+          local owner = pr.headRepositoryOwner or repo:match('^([^/]+)')
+          subject = ('Merge pull request #%s from %s/%s'):format(id, owner, pr.headRefName)
+          body = pr.title
         elseif method == 'squash' then -- Prefill body with commit messages instead of PR desc.
           subject = ('%s #%s'):format(pr.title, id)
           local cs = pr.commits or {}

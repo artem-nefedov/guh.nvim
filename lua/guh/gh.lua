@@ -294,6 +294,7 @@ local function to_pr(node)
     deletions = node.deletions,
     headRefName = node.headRefName,
     headRefOid = node.headRefOid,
+    headRepositoryOwner = vim.tbl_get(node, 'headRepositoryOwner', 'login'),
     isDraft = node.isDraft,
     labels = vim.tbl_get(node, 'labels', 'nodes') or {},
     number = node.number,
@@ -371,6 +372,7 @@ function M.get_pr_data(prnum, repo, opts, on_result)
           commits(first:100){ nodes{ commit{ oid committedDate messageHeadline messageBody } } }
           createdAt
           headRefName headRefOid
+          headRepositoryOwner{login}
           isDraft
           labels(first:20){ nodes{ name } }
           number

@@ -113,6 +113,7 @@
 --- @field file_paths table<string, true> Set of all current paths in this PR's diff. Used to validate `markFileAsViewed` targets locally.
 --- @field headRefName string
 --- @field headRefOid string
+--- @field headRepositoryOwner? string Login of the head repo owner (for standard merge-commit messages).
 --- @field isDraft boolean
 --- @field labels table
 --- @field n_files? integer Files in the rendered diff (incl. outdated/outside virtual files). Set by `pr.load_pr`.
