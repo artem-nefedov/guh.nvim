@@ -231,7 +231,8 @@ PR comments:
 ------------------------------------------------------------------------------
 Comment on issues, PRs, and diffs                                *guh-comment*
 
-`cc` on a PR diff-line, or on an existing comment, opens an editable
+`cc` on a PR diff-line, on a "diff --git" file heading (posts a file-level
+comment, not tied to any line), or on an existing comment, opens an editable
 `guh://…/comment/<id>` buffer. Write-and-close to post the comment. |guh-confirm|
 
 `cr` on a comment (thread), presents a menu:

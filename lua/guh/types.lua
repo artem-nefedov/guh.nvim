@@ -58,13 +58,15 @@
 --- @field in_head? boolean Thread anchors to a current-HEAD line (decides "outside" vs "outdated").
 --- @field thread_id? number GraphQL thread id (root comment databaseId).
 --- @field thread_node_id? string GraphQL global node id of the thread (e.g. `PRRT_kw…`). Needed by the resolveReviewThread mutation.
+--- @field subject_type? 'line'|'file' 'file' = a whole-file comment (no line/side); anchors to the file heading.
 
 --- @class CommentThread
 --- @field comments Comment[]
 --- @field id number
---- @field end_line number End of thread range (1-indexed GitHub file-line). = head comment's `end_line`.
+--- @field end_line number End of thread range (1-indexed GitHub file-line). = head comment's `end_line`. nil for file-level threads.
 --- @field start_line number Start of thread range (1-indexed GitHub file-line).
 --- @field url string
+--- @field subject_type? 'line'|'file' 'file' = a whole-file thread (anchored to the file heading).
 
 --- @class FileNameAndLinePair
 --- @field [1] string filename

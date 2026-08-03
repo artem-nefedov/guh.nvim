@@ -1015,13 +1015,17 @@ local function new_comment(pr_id, repo, line1, line2)
     if not pr then
       return util.msg(err or ('PR #%s not found'):format(pr_id), vim.log.levels.ERROR)
     end
-    local range = info.start_line == info.end_line and tostring(info.end_line)
-      or ('%d..%d'):format(info.start_line, info.end_line)
-    local edit_info = { title = ('Comment on %s:%s'):format(info.file, range) }
+    local where = info.subject_type == 'file' and ('%s (file)'):format(info.file)
+      or ('%s:%s'):format(
+        info.file,
+        info.start_line == info.end_line and tostring(info.end_line)
+          or ('%d..%d'):format(info.start_line, info.end_line)
+      )
+    local edit_info = { title = ('Comment on %s'):format(where) }
     vim.schedule(function()
       comments.edit_comment('comment', pr_id, { '' }, edit_info, function(input)
         local progress = util.new_progress_report('Sending comment...', vim.api.nvim_get_current_buf())
-        gh.new_comment(pr, input, info.file, info.start_line, info.end_line, info.side, repo, function(resp)
+        gh.new_comment(pr, input, info, repo, function(resp)
           if resp['errors'] == nil then
             progress('success', nil, 'Comment sent.')
             M.refresh({ feat = 'pr', id = pr_id, repo = repo })

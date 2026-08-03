@@ -152,6 +152,9 @@ local function flatten_threads_to_comments(threads)
       local in_head = (nodes[1] and nodes[1].line) ~= nil
       -- `diffSide` is a thread-level property in GraphQL; every comment in the thread inherits it.
       local c_side = thread.diffSide
+      -- 'LINE' (default) or 'FILE'. File-level comments anchor to the whole file (no line).
+      local subject_type = thread.subjectType
+      local is_file = subject_type == 'FILE'
       for _, c in ipairs(nodes) do
         local c_path = c.path ~= nil and c.path or head_path
         -- LEFT-side (deleted-line) comments, and outdated threads, have a null `line` on HEAD; fallback to `originalLine` then.
@@ -159,7 +162,8 @@ local function flatten_threads_to_comments(threads)
         local effective_start = c.startLine ~= nil and c.startLine
           or c.originalStartLine ~= nil and c.originalStartLine
           or head_start
-        if effective_end_line ~= nil and c_path ~= nil then
+        -- File-level comments have no line; keep them anyway (anchored to the file heading).
+        if (is_file or effective_end_line ~= nil) and c_path ~= nil then
           local reply_to
           if c.replyTo ~= nil and c.replyTo.databaseId then
             reply_to = c.replyTo.databaseId
@@ -180,6 +184,7 @@ local function flatten_threads_to_comments(threads)
             in_head = in_head,
             thread_id = thread_id,
             thread_node_id = thread_node_id,
+            subject_type = is_file and 'file' or 'line',
           })
         end
       end
@@ -385,6 +390,7 @@ function M.get_pr_data(prnum, repo, opts, on_result)
               id
               isOutdated isResolved
               diffSide
+              subjectType
               comments(first:100){
                 nodes{
                   databaseId body diffHunk path
@@ -564,21 +570,31 @@ function M.reply_to_comment(prnum, body, reply_to, repo, cb)
   }, cb)
 end
 
+--- Posts a new review comment. `info` is a `prepare_to_comment` result: a line-range comment,
+--- or (when `info.subject_type == 'file'`) a whole-file comment (no line/side).
+---
+--- @param info { file: string, side?: 'LEFT'|'RIGHT', start_line?: integer, end_line?: integer, subject_type?: 'line'|'file' }
 --- @param repo string "owner/repo"
-function M.new_comment(pr, body, path, start_line, line, side, repo, cb)
+function M.new_comment(pr, body, info, repo, cb)
   local commit_id = assert(pr.headRefOid)
   vim.validate('repo', repo, 'string')
   local fields = {
     { '-f', 'body=' .. body },
     { '-f', 'commit_id=' .. commit_id },
-    { '-f', 'path=' .. path },
-    { '-F', 'line=' .. line },
-    { '-f', 'side=' .. (side or 'RIGHT') },
+    { '-f', 'path=' .. info.file },
   }
-  if start_line ~= line then
-    table.insert(fields, { '-F', 'start_line=' .. start_line })
-    -- Multiline: `start_side` must match `side`.
-    table.insert(fields, { '-f', 'start_side=' .. (side or 'RIGHT') })
+  if info.subject_type == 'file' then
+    -- File-level comment: no line/side, just `subject_type=file`.
+    table.insert(fields, { '-f', 'subject_type=file' })
+  else
+    local line, start_line, side = info.end_line, info.start_line, info.side or 'RIGHT'
+    table.insert(fields, { '-F', 'line=' .. line })
+    table.insert(fields, { '-f', 'side=' .. side })
+    if start_line ~= line then
+      table.insert(fields, { '-F', 'start_line=' .. start_line })
+      -- Multiline: `start_side` must match `side`.
+      table.insert(fields, { '-f', 'start_side=' .. side })
+    end
   end
   gh_api('new_comment', 'POST', f('repos/%s/pulls/%d/comments', repo, pr.number), fields, cb)
 end

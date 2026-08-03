@@ -476,6 +476,14 @@ describe('comments', function()
       assert('lua/guh/config.lua' == info.file)
       assert(16 == info.start_line, info.start_line)
       assert(16 == info.end_line, info.end_line)
+      assert(info.subject_type ~= 'file', 'line comment must not be subject_type=file')
+
+      -- Commenting on the "diff --git" file heading → a file-level comment (no line/side).
+      local finfo = comments.prepare_to_comment(buf, 1, 1)
+      assert(finfo, 'file heading should be commentable')
+      assert('lua/guh/config.lua' == finfo.file, finfo.file)
+      assert('file' == finfo.subject_type, tostring(finfo.subject_type))
+      assert(finfo.start_line == nil and finfo.end_line == nil, 'file comment has no line')
     end)
   end)
 
@@ -553,6 +561,57 @@ describe('comments', function()
       assert(rows[6] and rows[6]:match('^▎ .*bob'), ('row 6: %q'):format(rows[6] or '<nil>'))
       -- Row 7 = '-deleted' (old=11) → LEFT (alice) heading lands here. This is the regression check.
       assert(rows[7] and rows[7]:match('^▎ .*alice'), ('row 7: %q'):format(rows[7] or '<nil>'))
+    end)
+  end)
+
+  it('comments.show anchors FILE-level comments to the file heading', function()
+    n.exec_lua(function()
+      local comments = require('guh.comments')
+      local state = require('guh.state')
+
+      local pr_id = 98
+      local repo = 'justinmk/guh.nvim'
+      local diff_buf = state.init_buf('prdiff', false, repo, pr_id)
+
+      -- Row 1 = the `diff --git` heading; a file-level comment must anchor there.
+      vim.api.nvim_buf_set_lines(diff_buf, 0, -1, false, {
+        'diff --git a/f.lua b/f.lua',
+        'index 000..111 100644',
+        '--- a/f.lua',
+        '+++ b/f.lua',
+        '@@ -10,1 +10,2 @@',
+        ' context',
+        '+added',
+      })
+
+      --- @type table<string, CommentThread[]>
+      local threads = {
+        ['f.lua'] = {
+          {
+            id = 1,
+            url = '',
+            subject_type = 'file',
+            comments = {
+              {
+                id = 1,
+                user = 'alice',
+                body = 'whole-file note',
+                updated_at = '2024-01-01',
+                side = 'RIGHT',
+                path = 'f.lua',
+                subject_type = 'file',
+              },
+            },
+          },
+        },
+      }
+
+      comments.load_pr_comments(pr_id, repo, diff_buf, { viewed = {}, n_threads = 0, n_resolved = 0 }, threads, 0, 0)
+
+      local prc = state.get_buf('prcomments', repo, pr_id)
+      local rows = vim.api.nvim_buf_get_lines(prc, 0, -1, false)
+      -- Row 1 = the `diff --git` heading → file-level (alice) heading lands here, tagged (file).
+      assert(rows[1] and rows[1]:match('^▎ %(file%) alice'), ('row 1: %q'):format(rows[1] or '<nil>'))
     end)
   end)
 

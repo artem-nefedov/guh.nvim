@@ -210,6 +210,15 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
   ---------------------------------------------------------------------------
   local line_map = to_line_map(diff_lines)
 
+  -- Map normalized filepath → its `diff --git` heading row. File-level comments (no line) anchor here.
+  local heading_idx = {} ---@type table<string, integer>
+  for i, l in ipairs(diff_lines) do
+    local gitfile = l:match(diff_git_pat)
+    if gitfile then
+      heading_idx[gitfile:gsub('^[ab]/', '')] = i
+    end
+  end
+
   ---------------------------------------------------------------------------
   -- Step 2: Build text lines for the comment buffer
   ---------------------------------------------------------------------------
@@ -262,9 +271,11 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
       -- The thread's head comment sets the side; replies inherit. Comments
       -- with side='LEFT' anchor to deleted/old-file lines.
       local side = thread.comments[1] and thread.comments[1].side
-      local end_idx = find_idx(normalized_filename, thread.end_line, side)
+      -- File-level threads have no line; anchor them to the file's `diff --git` heading row.
+      local is_file = thread.subject_type == 'file'
+      local end_idx = is_file and heading_idx[normalized_filename] or find_idx(normalized_filename, thread.end_line, side)
       if end_idx then
-        local start_idx = find_idx(normalized_filename, thread.start_line, side) or end_idx
+        local start_idx = (is_file and end_idx) or find_idx(normalized_filename, thread.start_line, side) or end_idx
         if start_idx > end_idx then
           start_idx, end_idx = end_idx, start_idx
         end
@@ -273,19 +284,15 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
           or { { user = thread.user, updated_at = thread.updated_at, body = thread.body } }
         local tag = filename:match(outdated_prefix_pat) and '(outdated) '
           or filename:match(outside_prefix_pat) and '(outside) '
+          or is_file and '(file) '
           or ''
 
+        -- File-level threads have no line; show just the path (else `<path>:<line>`).
+        local where = is_file and filename or ('%s:%d'):format(filename, thread.end_line)
         local comment_blocks = entries[start_idx] or {}
         for ci, c in ipairs(thread_comments) do
           local heading = (ci == 1)
-              and ('%s%s%s %s %s:%d'):format(
-                heading_prefix,
-                tag,
-                c.user or '?',
-                c.updated_at or '',
-                filename,
-                thread.end_line
-              )
+              and ('%s%s%s %s %s'):format(heading_prefix, tag, c.user or '?', c.updated_at or '', where)
             or ('%s%s %s'):format(heading_prefix, c.user or '?', c.updated_at or '')
           local body = {}
           if c.body and c.body ~= '' then
@@ -459,6 +466,7 @@ function M.to_threads(gh_comments)
       start_line = comments[1].start_line,
       url = comments[#comments].url,
       comments = comments,
+      subject_type = comments[1].subject_type,
     }
 
     local filepath = comments[1].path -- Relative file path as given in the unified diff.
@@ -538,11 +546,18 @@ function M.render_diff(pr_data, diff_stdout)
   local viewed = pr_data.viewed
   local diff_lines, n_files = prepare_pr_diff(diff_stdout, viewed)
   local line_map = to_line_map(diff_lines)
+  -- Set of files present in the visible diff (for anchoring file-level comments to their heading).
+  local files_in_diff = {}
+  for _, m in pairs(line_map) do
+    files_in_diff[m.file] = true
+  end
   local viewed_threads = {} ---@type table<integer, true>
   for _, c in ipairs(pr_data.raw_comments) do
+    -- File-level comments anchor to the file heading; keep them as-is when the file is in the diff.
+    local file_in_diff = c.subject_type == 'file' and files_in_diff[c.path]
     -- Anchor thread to an off-diff quasi-file when: `isOutdated` (GitHub flag), or outside the diff
     -- and not in "Viewed" file. "outside" if it anchors to current-HEAD, else "outdated".
-    if c.thread_id and (c.outdated or (not viewed[c.path] and not in_diff(line_map, c))) then
+    if c.thread_id and not file_in_diff and (c.outdated or (not viewed[c.path] and not in_diff(line_map, c))) then
       c.path = ('%s-%d:%s'):format(c.in_head and 'outside' or 'outdated', c.thread_id, c.path)
     end
     -- Count threads hidden by "viewed". After the `c.path` assignment above, it matches how `viewed` is keyed.
@@ -761,15 +776,33 @@ end
 
 --- Gets info for commenting on a range in a prdiff. Does not make a network request.
 ---
+--- When the (single-line) range is on a `diff --git`/`(viewed)` file heading, returns a
+--- file-level comment (`subject_type='file'`, no line/side) instead of a line comment.
+---
 --- @param buf integer prdiff buffer
 --- @param line1 integer 1-indexed start line
 --- @param line2 integer 1-indexed end line (inclusive)
---- @return table|nil info { file, side, start_line, end_line }
+--- @return table|nil info { file, side?, start_line?, end_line?, subject_type? }
 function M.prepare_to_comment(buf, line1, line2)
   line1 = math.max(1, line1)
   line2 = math.max(line1, line2 or line1)
 
-  local line_map = to_line_map(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+  -- Commenting on a file heading = a file-level comment.
+  if line1 == line2 then
+    local l = lines[line1] or ''
+    local file = l:match(diff_git_pat) or l:match('^%(viewed%) (.+)$')
+    if file then
+      if file:match(outdated_prefix_pat) or file:match(outside_prefix_pat) then
+        util.msg('Cannot comment on an outdated/outside file', vim.log.levels.WARN)
+        return nil
+      end
+      return { file = file:gsub('^[ab]/', ''), subject_type = 'file' }
+    end
+  end
+
+  local line_map = to_line_map(lines)
   local start_entry = line_map[line1]
   local end_entry = line_map[line2]
   if not start_entry or not end_entry then
