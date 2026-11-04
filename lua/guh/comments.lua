@@ -284,10 +284,13 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
 
         local thread_comments = thread.comments
           or { { user = thread.user, updated_at = thread.updated_at, body = thread.body } }
-        local tag = filename:match(outdated_prefix_pat) and '(outdated) '
-          or filename:match(outside_prefix_pat) and '(outside) '
-          or is_file and '(file) '
-          or ''
+        local tag = ('%s%s'):format(
+          thread_comments[1].resolved and '(resolved) ' or '',
+          filename:match(outdated_prefix_pat) and '(outdated) '
+            or filename:match(outside_prefix_pat) and '(outside) '
+            or is_file and '(file) '
+            or ''
+        )
 
         -- File-level threads have no line; show just the path (else `<path>:<line>`).
         local where = is_file and filename or ('%s:%d'):format(filename, thread.end_line)
@@ -326,7 +329,7 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
             col = 0,
             end_col = 0,
             message = body,
-            severity = severity.INFO,
+            severity = thread_comments[1].resolved and severity.HINT or severity.INFO,
             source = 'guh.nvim',
             user_data = { comments = thread_comments },
           })
@@ -418,6 +421,7 @@ function M.load_pr_comments(id, repo, diff_buf, pr_data, comments_list)
   vim.api.nvim_buf_call(buf, function()
     vim.cmd([[syntax match GuhHeading /^▎ \zs.*$/ containedin=ALL]])
     vim.cmd([[syntax match GuhWarning /(outdated)\|(outside)\|(truncated)/ containedin=ALL]])
+    vim.cmd([[syntax match GuhDimmed /(resolved)/ containedin=ALL]])
   end)
 
   return buf
@@ -536,6 +540,7 @@ end
 ---     (Example: "outdated-3271868956:runtime/lua/vim/_core/options.lua")
 ---   - "outside" threads (anchored outside of the PR diff).
 ---   - Collapses VIEWED files.
+---   - Hides resolved threads, unless `pr_data.show_resolved`.
 ---   - Groups comments into per-file threads (`to_threads`).
 ---
 --- @param pr_data PullRequest Note: `raw_comments` is mutated in-place to rewrite paths.
@@ -554,7 +559,10 @@ function M.render_diff(pr_data, diff_stdout)
     files_in_diff[m.file] = true
   end
   local viewed_threads = {} ---@type table<integer, true>
-  for _, c in ipairs(pr_data.raw_comments) do
+  local shown = vim.tbl_filter(function(c)
+    return pr_data.show_resolved or not c.resolved
+  end, pr_data.raw_comments)
+  for _, c in ipairs(shown) do
     -- File-level comments anchor to the file heading; keep them as-is when the file is in the diff.
     local file_in_diff = c.subject_type == 'file' and files_in_diff[c.path]
     -- Anchor thread to an off-diff quasi-file when: `isOutdated` (GitHub flag), or outside the diff
@@ -562,12 +570,12 @@ function M.render_diff(pr_data, diff_stdout)
     if c.thread_id and not file_in_diff and (c.outdated or (not viewed[c.path] and not in_diff(line_map, c))) then
       c.path = ('%s-%d:%s'):format(c.in_head and 'outside' or 'outdated', c.thread_id, c.path)
     end
-    -- Count threads hidden by "viewed". After the `c.path` assignment above, it matches how `viewed` is keyed.
-    if viewed[c.path] and c.thread_id then
+    -- Count unresolved threads hidden by "viewed". After the `c.path` rewrite above, it matches how `viewed` is keyed.
+    if viewed[c.path] and c.thread_id and not c.resolved then
       viewed_threads[c.thread_id] = true
     end
   end
-  local threads = M.to_threads(pr_data.raw_comments)
+  local threads = M.to_threads(shown)
   local lines = vim
     .iter({
       to_offdiff_section(threads, 'outdated', viewed),
@@ -744,7 +752,7 @@ function M.update_comment(linenr)
   end)
 end
 
---- Acts on a comment thread (Reply or Resolve).
+--- Acts on a comment thread (Reply, Resolve/Unresolve).
 ---
 --- @param linenr integer 1-indexed line number.
 function M.reply_or_resolve(linenr)
@@ -762,7 +770,8 @@ function M.reply_or_resolve(linenr)
     if not c then
       return
     end
-    local action = util.await_select({ 'Reply', 'Resolve' }, {
+    local resolve = not c.resolved
+    local action = util.await_select({ 'Reply', resolve and 'Resolve' or 'Unresolve' }, {
       prompt = ('Thread on %s:%d:'):format(c.path or '?', c.end_line or 0),
     })
     if action == 'Reply' then
@@ -778,17 +787,17 @@ function M.reply_or_resolve(linenr)
       else
         progress('failed', nil, 'Failed to send reply.')
       end
-    elseif action == 'Resolve' then
+    elseif action == 'Resolve' or action == 'Unresolve' then
       if not c.thread_node_id then
         return util.msg('Missing thread_node_id (refresh and retry)', vim.log.levels.WARN)
       end
-      local progress = util.new_progress_report('Resolving thread...', buf)
-      local resp = async.await(2, gh.resolve_thread, c.thread_node_id)
+      local progress = util.new_progress_report(('%s thread...'):format(resolve and 'Resolving' or 'Unresolving'), buf)
+      local resp = async.await(3, gh.resolve_thread, c.thread_node_id, resolve)
       if resp['errors'] == nil then
-        progress('success', nil, 'Thread resolved.')
+        progress('success', nil, ('Thread %s.'):format(resolve and 'resolved' or 'unresolved'))
         require('guh.pr').refresh({ feat = 'pr', id = prnum, repo = repo })
       else
-        progress('failed', nil, 'Failed to resolve thread.')
+        progress('failed', nil, ('Failed to %s thread.'):format(action:lower()))
       end
     end
   end)

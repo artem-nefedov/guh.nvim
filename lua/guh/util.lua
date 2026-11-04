@@ -73,6 +73,7 @@ end
 ---   - Repo URL: `"https://github.com/owner/repo"`
 ---   - slug: `"owner/repo#13"`, or bare repo slug `"owner/repo"`.
 ---   - guh URI: `"guh://owner/repo/pr/13"`, `"guh://owner/repo/issue/13"`, `"guh://owner/repo/commit/<sha>"`, …
+---   - fallback: the first `#N` (else `N`) match: `"#42578:"`, `"fix(#42578):"`.
 ---
 --- @param arg string
 --- @return GuhTarget?
@@ -132,8 +133,9 @@ function M.parse_target(arg)
     return { sha = path }
   end
 
-  val = tonumber(path)
-  if val then
+  -- Bare number, else the first "#N"/"N" match (cWORD garbage like "#42578:").
+  val = tonumber(path) or tonumber(path:match('#(%d+)') or path:match('%d+'))
+  if val and val > 0 then
     return { id = val }
   end
   return nil
@@ -327,6 +329,7 @@ function M.set_default_keymaps(buf)
   M.map_default(buf, 'n', 'R', '<Plug>(guh-refresh)', 'Refresh this guh:// buffer')
   M.map_default(buf, 'n', 'gX', '<Plug>(guh-web)', 'Open this view in web browser')
   M.map_default(buf, 'n', 'dd', '<Plug>(guh-diff)', 'View the PR diff')
+  M.map_default(buf, 'n', 'dz', '<Plug>(guh-resolved)', 'Toggle resolved threads in the PR diff')
   M.map_default(buf, 'n', 'dl', '<Plug>(guh-logs)', 'View the CI logs for this PR')
   M.map_default(buf, 'n', ']f', '<Plug>(guh-next)', 'View the next PR commit / CI job')
   M.map_default(buf, 'n', '[f', '<Plug>(guh-prev)', 'View the previous PR commit / CI job')
@@ -349,8 +352,6 @@ function M.set_default_keymaps(buf)
   M.map_default(buf, 'n', 'cv', '<Plug>(guh-viewed)', 'Toggle "Viewed" on diff-file at cursor')
 
   -- The builtin gitcommit/diff ftplugins don't map [[/]] ?
-  -- In prcomments/ buffers, jump between comment headings (▎-prefixed, see comments.lua);
-  -- elsewhere between "diff --git"/"(viewed)" file headings.
   local is_comments = (vim.b[buf].guh or {}).feat == 'prcomments'
   local heading = is_comments and [[\v^▎]] or [[\v^(diff --git a/|\(viewed\) )]]
   local jump_target = is_comments and 'comment' or 'diff-file heading'
